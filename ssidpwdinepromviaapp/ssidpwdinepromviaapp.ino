@@ -24,6 +24,7 @@ struct PinConfig{
 //used to read values
 String strArray[10];
 int strArrayLength=10;
+int bitMarker=0;
 
 PinConfig pins[20];
 int pinnumbers[] = {3,4,5,12,13,14,16};
@@ -83,23 +84,34 @@ void configureme(){
       
       String ssid = server.arg("ssid");
       String password = server.arg("password");
-      writedata(ssid, password);
-      Serial.println("Wrote data. \nResetting..");
+      strArray[0] = ssid;
+      strArray[1] = password;
+      writedata();
+      Serial.println("Wrote data. \nnow configuring");
       server.send(200, "text/plain", "{status: \"Wrote data... starting wifi\"}");
       WiFi.disconnect();
       connecttowifi();
-      
     }
   }
   server.send(200, "text/plain", "{error: \"Invalid request\"}");
 }
 
-int readdata(String &Name, String &Password){
+bool isinitialised(){
   EEPROM.begin(512);
+  int p = 0;
+  
+  if(char(EEPROM.read(p)) == 'S' && char(EEPROM.read(p+1)) == 'E' && char(EEPROM.read(p+2)) == 'T'){
+    //Serial.println("magic byte set");
+    return true;
+  }
+  return false;
+}
 
+int readdata(){
+  
   int count= 0,p = 0;
-  if(char(EEPROM.read(p)) == 'S' && char(EEPROM.read(p+1)) == 'E' && char(EEPROM.read(p+2)) == 'T')
-    Serial.println("magic byte set");
+  if(isinitialised())
+    Serial.println("In readdata there is something to read");
   else
     return 0;
 
@@ -114,41 +126,35 @@ int readdata(String &Name, String &Password){
     p++;
   }
   
-  Name = strArray[0];
-  Password = strArray[1];
-  Serial.println("Read data : " + Name + Password+"\nlength of name = "+Name.length());
-  if(Name.length()==0)
-    return 0;
-  return 1;
+  if(strArray[9].equals("SET"))
+    return 1;
+  else return 0;
 }
 
-void writedata(String Name, String Password){
+void writedata(){
   
-  EEPROM.begin(512);
-  int p = 0,i=0;
-  EEPROM.write(p,'S');  //Flagging
-  EEPROM.write(p+1,'E');
-  EEPROM.write(p+2,'T');
+  int p = 0;
+
+  if(isinitialised()){
+    Serial.println("IN writedata it is already initialised");
+  }
+  else{
+    EEPROM.write(p,'S');  //Flagging
+    EEPROM.write(p+1,'E');
+    EEPROM.write(p+2,'T');
+    strArray[9]="SET";
+  }
   p+=3;
   
-  for(i =0; i<Name.length(); i++){
-    EEPROM.write(p,Name[i]);
-    p++;
-  }
-  EEPROM.write(p,'\0');
-  p++;
-  
-  for(i =0; i<Password.length(); i++){
-    EEPROM.write(p,Password[i]);
-    p++;
-  }
-  EEPROM.write(p,'\0');
-  p++;
-
-  for(i=0; i<8; i++){
+  for(int i = 0; i<strArrayLength; i++){
+    for(int j=0; j<strArray[i].length();j++){
+      EEPROM.write(p,strArray[i][j]);
+      p++;
+    }
     EEPROM.write(p,'\0');
     p++;
   }
+  
 
   EEPROM.commit(); // necessary keep in mind;
 
@@ -158,9 +164,18 @@ void writedata(String Name, String Password){
 
 //===========================================================
 
+int getIndex(int number){
+  for(int i =0; i<sizee; i++){
+    if(pinnumbers[i] == number)
+      return i;
+  }
+}
+
 void command(){
   String sendme;
+  
   if(server.args() == 2){
+    
     if(server.hasArg("gpio")&& server.hasArg("value")){
       String value = server.arg("value");
       String num = server.arg("gpio");
@@ -175,6 +190,11 @@ void command(){
             digitalWrite(number,HIGH);
             String sendme = "{gpio:"+String(number)+", state:true}";
             server.send(200, "text/plain",sendme);
+
+            int index = getIndex(number);
+            bitMarker |= 1<<index;
+            strArray[2] = String(bitMarker);
+            writedata();
           }
 
           else{
@@ -188,6 +208,11 @@ void command(){
             digitalWrite(number,LOW);
             sendme = "{gpio:"+String(number)+", state:false}";
             server.send(200, "text/plain",sendme);
+
+            int index = getIndex(number);
+            bitMarker &= ~(1<<index);
+            strArray[2] = String(bitMarker);
+            writedata();
           }
 
           else{
@@ -211,19 +236,23 @@ void command(){
           sendme = "{error: \"Invalid request\"}";
   }
   server.send(200, "text/plain",sendme);
+  Serial.println("bitmarker is"+String(bitMarker));
+  Serial.println(strArray[2]);
 }
 
 //connected===================================================
 
 void connectedbro(){
-  String sendme = "{status: \"Get off bitch\"}";
+  String sendme = "{status: \"connected bitch\"}";
   server.send(200, "text/plain",sendme);
 }
 
 //nowifi setting==============================================
 
 void nowifi(){
-  writedata("","");
+  strArray[0] = "";
+  strArray[1] = "";
+  writedata();
   String sendme = "{status:\"wifi removed\"}";
   server.send(200, "text/plain", sendme);
   WiFi.disconnect();
@@ -241,13 +270,10 @@ void getmeip(){
 
 void connecttowifi(){
 
-  String Name,Password;
+  String Name=strArray[0],Password=strArray[1];
   
-  if(readdata(Name, Password)){
-    
-    WiFi.begin(Name.c_str(), Password.c_str());      // The SSID That We Want To Connect To
-    
-      // Printing Message For User That Connetion Is On Process ---------------
+  if(Name != ""){
+    WiFi.begin(Name.c_str(), Password.c_str());      
     Serial.println("!--- Connecting To " + WiFi.SSID() + " ---!");
     
       // WiFi Connectivity ----------------------------------------------------
@@ -260,11 +286,18 @@ void connecttowifi(){
   }
 }
 
+//============================================================
+
+void httpupdate(){
+  Serial.println("I have got nothing till now");
+}
+
 void setup()
 {
+  
   // Setting The Serial Port
   Serial.begin(115200);           // Computer Communication
-  
+  readdata();
   // Setting The Mode Of Pins
   for(int i  =0 ; i<20; i++){
     pins[i].availability = false;
@@ -275,6 +308,16 @@ void setup()
     int index = pinnumbers[i];
     Serial.println(index);
     pinMode(index,OUTPUT);
+    
+    if(strArray[2] != ""){
+      bitMarker = atoi(strArray[2].c_str());
+      if(bitMarker & 1<<i){
+        digitalWrite(index,HIGH);
+        pins[i].state = true;
+      }
+      else
+        digitalWrite(index,LOW);
+    }
     pins[index].availability = true;
   }
   
@@ -294,12 +337,12 @@ void setup()
 
   connecttowifi();
 
-
   server.on("/configure",configureme);
   server.on("/nowifi",nowifi);
   server.on("/command",command);
   server.on("/connected",connectedbro);
   server.on("/getmeip",getmeip);
+  server.on("/update",httpupdate);
   server.begin();
   Serial.println("HTTP server started");
 }
